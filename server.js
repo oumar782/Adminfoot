@@ -50,7 +50,7 @@ app.use('/api/demonstrations', (req, res, next) => {
 
 // ✅ Route de test (optionnelle)
 app.get('/', (req, res) => {
-  res.send("🚀 API Foot Admin Suite opérationnelle");
+  res.send("🚀 API Foot Admin Suite opérationnele");
 });
 
 // ✅ Gestion d’erreurs globale
