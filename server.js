@@ -7,13 +7,15 @@ import partenariats from './Gestionnaire/Partenariats/partenariats.js';
 import clients from './Gestionnaire/Client/client.js';
 import reservation from './Gestionnaire/Reservation/reservation.js';
 import ajoutuser from './Gestionnaire/User/AjoutUser.js';
+
 dotenv.config();
 
 const app = express();
 
 const allowedOrigins = [
   'https://foot-admin-suite.vercel.app', 
-  'http://localhost:5173'
+  'http://localhost:5173',
+  'http://localhost:5175'
 ];
 
 const corsOptions = {
@@ -47,6 +49,9 @@ app.use('/api/partenariats', partenariats);
 app.use('/api/client', clients);
 app.use('/api/reservation', reservation);
 app.use('/api/ajoutuser', ajoutuser);
+
+
+
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.status(200).json({

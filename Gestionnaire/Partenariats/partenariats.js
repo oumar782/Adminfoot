@@ -2,7 +2,7 @@ import express from 'express';
 const router = express.Router();
 import db from '../../db.js';
 
-// Validation des données améliorée
+// Validation des données de partenariat
 const validatePartnershipData = (data, isUpdate = false) => {
   const errors = [];
   const today = new Date();
@@ -50,6 +50,13 @@ const validatePartnershipData = (data, isUpdate = false) => {
   return errors;
 };
 
+// Fonction utilitaire pour valider un ID
+const isValidId = (id) => {
+  if (!id && id !== 0) return false;
+  const num = Number(id);
+  return Number.isInteger(num) && num > 0 && num <= 2147483647; // INT PostgreSQL max
+};
+
 // CREATE
 router.post('/', async (req, res) => {
   try {
@@ -64,7 +71,6 @@ router.post('/', async (req, res) => {
 
     const { nom, type, date_debut, date_fin, contact, statut } = req.body;
 
-    // Formatage des dates pour PostgreSQL
     const formattedDateDebut = new Date(date_debut).toISOString();
     const formattedDateFin = new Date(date_fin).toISOString();
 
@@ -91,14 +97,54 @@ router.post('/', async (req, res) => {
   }
 });
 
-// READ ALL avec pagination et filtres
+// GET Statistics - Cette route doit être placée avant les routes paramétrées
+router.get('/statsp', async (req, res) => {
+  try {
+    const [activeResult, inactiveResult, totalResult] = await Promise.all([
+      db.query(`SELECT COUNT(*) FROM partenariat WHERE statut = 'active'`),
+      db.query(`SELECT COUNT(*) FROM partenariat WHERE statut = 'inactive'`),
+      db.query(`SELECT COUNT(*) FROM partenariat`)
+    ]);
+
+    const active = parseInt(activeResult.rows[0].count);
+    const inactive = parseInt(inactiveResult.rows[0].count);
+    const total = parseInt(totalResult.rows[0].count);
+
+    res.json({
+      success: true,
+      data: {
+        active,
+        inactive,
+        total,
+        activePercentage: Math.round((active / total) * 100) || 0,
+        inactivePercentage: Math.round((inactive / total) * 100) || 0
+      }
+    });
+  } catch (err) {
+    console.error('Erreur:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Erreur serveur',
+      error: err.message 
+    });
+  }
+});
+
+// READ ALL with pagination
 router.get('/', async (req, res) => {
   try {
     const { page = 1, limit = 10, name, type, status } = req.query;
     const offset = (page - 1) * limit;
 
+    // Validate pagination params
+    if (isNaN(page) || page < 1 || isNaN(limit) || limit < 1 || limit > 100) {
+      return res.status(400).json({
+        success: false,
+        message: 'Paramètres de pagination invalides. Page doit être ≥ 1 et limite entre 1 et 100'
+      });
+    }
+
     let query = `SELECT * FROM partenariat`;
-    
     let whereClauses = [];
     let queryParams = [];
     let paramIndex = 1;
@@ -129,20 +175,16 @@ router.get('/', async (req, res) => {
     queryParams.push(limit, offset);
 
     const result = await db.query(query, queryParams);
-
-    // Compte total avec les mêmes filtres
-    let countQuery = 'SELECT COUNT(*) FROM partenariat';
-    if (whereClauses.length > 0) {
-      countQuery += ' WHERE ' + whereClauses.join(' AND ');
-    }
-    const countResult = await db.query(countQuery, queryParams.slice(0, -2));
+    const countResult = await db.query(
+      `SELECT COUNT(*) FROM partenariat ${whereClauses.length > 0 ? 'WHERE ' + whereClauses.join(' AND ') : ''}`,
+      queryParams.slice(0, -2)
+    );
     const total = parseInt(countResult.rows[0].count);
 
-    // Formatage des dates pour le frontend
     const formattedResults = result.rows.map(row => ({
       ...row,
-      date_debut: row.date_debut ? new Date(row.date_debut).toISOString().split('T')[0] : null,
-      date_fin: row.date_fin ? new Date(row.date_fin).toISOString().split('T')[0] : null
+      date_debut: row.date_debut?.toISOString().split('T')[0] || null,
+      date_fin: row.date_fin?.toISOString().split('T')[0] || null
     }));
 
     res.status(200).json({
@@ -165,15 +207,20 @@ router.get('/', async (req, res) => {
   }
 });
 
-// READ ONE
+// GET BY ID
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    if (!id || isNaN(id)) {
+    if (!isValidId(id)) {
       return res.status(400).json({
         success: false,
-        message: 'ID de partenariat invalide'
+        message: 'ID de partenariat invalide',
+        details: {
+          raison: 'Doit être un nombre entier positif entre 1 et 2147483647',
+          type_reçu: typeof id,
+          valeur_reçue: id
+        }
       });
     }
 
@@ -185,15 +232,14 @@ router.get('/:id', async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Partenariat non trouvé'
+        message: `Aucun partenariat trouvé avec l'ID ${id}`
       });
     }
 
-    // Formatage des dates
     const formattedData = {
       ...result.rows[0],
-      date_debut: result.rows[0].date_debut ? new Date(result.rows[0].date_debut).toISOString().split('T')[0] : null,
-      date_fin: result.rows[0].date_fin ? new Date(result.rows[0].date_fin).toISOString().split('T')[0] : null
+      date_debut: result.rows[0].date_debut?.toISOString().split('T')[0] || null,
+      date_fin: result.rows[0].date_fin?.toISOString().split('T')[0] || null
     };
 
     res.status(200).json({
@@ -215,14 +261,20 @@ router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    if (!id || isNaN(id)) {
+    if (!isValidId(id)) {
       return res.status(400).json({
         success: false,
-        message: 'ID de partenariat invalide'
+        message: 'ID de partenariat invalide',
+        details: {
+          raison: 'Doit être un nombre entier positif entre 1 et 2147483647',
+          type_reçu: typeof id,
+          valeur_reçue: id
+        }
       });
     }
 
     const errors = validatePartnershipData(req.body, true);
+
     if (errors.length > 0) {
       return res.status(422).json({
         success: false,
@@ -232,10 +284,6 @@ router.put('/:id', async (req, res) => {
     }
 
     const { nom, type, date_debut, date_fin, contact, statut } = req.body;
-
-    // Formatage des dates
-    const formattedDateDebut = date_debut ? new Date(date_debut).toISOString() : null;
-    const formattedDateFin = date_fin ? new Date(date_fin).toISOString() : null;
 
     const result = await db.query(
       `UPDATE partenariat 
@@ -248,13 +296,21 @@ router.put('/:id', async (req, res) => {
          statut = COALESCE($6, statut)
        WHERE id_partenariat = $7
        RETURNING *`,
-      [nom, type, formattedDateDebut, formattedDateFin, contact, statut, id]
+      [
+        nom, 
+        type,
+        date_debut ? new Date(date_debut).toISOString() : null,
+        date_fin ? new Date(date_fin).toISOString() : null,
+        contact,
+        statut,
+        id
+      ]
     );
 
     if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Partenariat non trouvé'
+        message: `Aucun partenariat trouvé avec l'ID ${id}`
       });
     }
 
@@ -273,15 +329,53 @@ router.put('/:id', async (req, res) => {
   }
 });
 
+
+router.get('/statsp', async (req, res) => {
+  try {
+      const [activeResult, inactiveResult, totalResult] = await Promise.all([
+          query(`SELECT COUNT(*) FROM partenariat WHERE statut = 'active'`),
+          query(`SELECT COUNT(*) FROM partenariat WHERE statut = 'inactive'`),
+          query(`SELECT COUNT(*) FROM partenariat`)
+      ]);
+
+      const active = parseInt(activeResult.rows[0].count);
+      const inactive = parseInt(inactiveResult.rows[0].count);
+      const total = parseInt(totalResult.rows[0].count);
+
+      res.json({
+          success: true,
+          data: {
+              active,
+              inactive,
+              total,
+              activePercentage: Math.round((active / total) * 100) || 0,
+              inactivePercentage: Math.round((inactive / total) * 100) || 0
+          }
+      });
+  } catch (err) {
+      console.error('Erreur:', err);
+      res.status(500).json({ 
+          success: false, 
+          message: 'Erreur serveur',
+          error: err.message 
+      });
+  }
+});
+
 // DELETE
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    if (!id || isNaN(id)) {
+    if (!isValidId(id)) {
       return res.status(400).json({
         success: false,
-        message: 'ID de partenariat invalide'
+        message: 'ID de partenariat invalide',
+        details: {
+          raison: 'Doit être un nombre entier positif entre 1 et 2147483647',
+          type_reçu: typeof id,
+          valeur_reçue: id
+        }
       });
     }
 
@@ -295,7 +389,7 @@ router.delete('/:id', async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Partenariat non trouvé'
+        message: `Aucun partenariat trouvé avec l'ID ${id}`
       });
     }
 
