@@ -1,4 +1,3 @@
-// reservation.js
 import express from 'express';
 const router = express.Router();
 import db from '../../db.js';
@@ -8,7 +7,7 @@ const validateReservationData = (data, isUpdate = false) => {
   const errors = [];
 
   if (!isUpdate || data.hasOwnProperty('formule')) {
-    const validFormules = ['Basique', 'Standard', 'Premium'];
+    const validFormules = ['Starter', 'Pro', 'Enterprise'];
     if (!data.formule || !validFormules.includes(data.formule)) {
       errors.push(`Formule invalide. Options: ${validFormules.join(', ')}`);
     }
@@ -44,6 +43,13 @@ const validateReservationData = (data, isUpdate = false) => {
     }
   }
 
+  if (!isUpdate || data.hasOwnProperty('statut')) {
+    const validStatuts = ['signé', 'perdu', 'en_attente'];
+    if (!data.statut || !validStatuts.includes(data.statut)) {
+      errors.push(`Statut invalide. Options: ${validStatuts.join(', ')}`);
+    }
+  }
+
   return errors;
 };
 
@@ -68,7 +74,8 @@ router.post('/', async (req, res) => {
       type_perso = [],
       fonctionnalite = [],
       email,
-      date
+      date,
+      statut
     } = req.body;
 
     // Calcul du total
@@ -76,8 +83,8 @@ router.post('/', async (req, res) => {
 
     const result = await db.query(
       `INSERT INTO reservation 
-       (formule, prix, prix_perso, nom_complet, entreprise, type_perso, fonctionnalite, email, total, date)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       (formule, prix, prix_perso, nom_complet, entreprise, type_perso, fonctionnalite, email, total, date, statut)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
       [
         formule,
@@ -85,11 +92,12 @@ router.post('/', async (req, res) => {
         prix_perso,
         nom_complet,
         entreprise,
-        type_perso,
-        fonctionnalite,
+        JSON.stringify(type_perso),
+        JSON.stringify(fonctionnalite),
         email,
         total,
-        new Date(date).toISOString()
+        new Date(date).toISOString(),
+        statut
       ]
     );
 
@@ -111,7 +119,7 @@ router.post('/', async (req, res) => {
 // READ ALL avec pagination et filtres
 router.get('/', async (req, res) => {
   try {
-    const { page = 1, limit = 10, name, formule, email } = req.query;
+    const { page = 1, limit = 10, name, formule, email, statut } = req.query;
     const offset = (page - 1) * limit;
 
     let query = `SELECT * FROM reservation`;
@@ -137,6 +145,12 @@ router.get('/', async (req, res) => {
       paramIndex++;
     }
 
+    if (statut) {
+      whereClauses.push(`statut = $${paramIndex}`);
+      queryParams.push(statut);
+      paramIndex++;
+    }
+
     if (whereClauses.length > 0) {
       query += ' WHERE ' + whereClauses.join(' AND ');
     }
@@ -154,9 +168,26 @@ router.get('/', async (req, res) => {
     const countResult = await db.query(countQuery, queryParams.slice(0, -2));
     const total = parseInt(countResult.rows[0].count);
 
+    // Calcul des statistiques
+    const statsQuery = `
+      SELECT 
+        COUNT(*) as total,
+        COUNT(CASE WHEN formule = 'Starter' THEN 1 END) as starter,
+        COUNT(CASE WHEN formule = 'Pro' THEN 1 END) as pro,
+        COUNT(CASE WHEN formule = 'Enterprise' THEN 1 END) as enterprise,
+        COUNT(CASE WHEN statut = 'signé' THEN 1 END) as signe,
+        COUNT(CASE WHEN statut = 'perdu' THEN 1 END) as perdu,
+        COUNT(CASE WHEN statut = 'en_attente' THEN 1 END) as en_attente,
+        COALESCE(SUM(CASE WHEN statut = 'signé' THEN total ELSE 0 END), 0) as chiffre_affaire
+      FROM reservation
+      ${whereClauses.length > 0 ? 'WHERE ' + whereClauses.join(' AND ') : ''}
+    `;
+    const statsResult = await db.query(statsQuery, queryParams.slice(0, -2));
+
     res.status(200).json({
       success: true,
       data: result.rows,
+      stats: statsResult.rows[0],
       pagination: {
         total,
         page: parseInt(page),
@@ -242,7 +273,8 @@ router.put('/:id', async (req, res) => {
       type_perso,
       fonctionnalite,
       email,
-      date
+      date,
+      statut
     } = req.body;
 
     // Calcul du total mis à jour
@@ -260,8 +292,9 @@ router.put('/:id', async (req, res) => {
          fonctionnalite = COALESCE($7, fonctionnalite),
          email = COALESCE($8, email),
          total = COALESCE($9, total),
-         date = COALESCE($10, date)
-       WHERE id_reservation = $11
+         date = COALESCE($10, date),
+         statut = COALESCE($11, statut)
+       WHERE id_reservation = $12
        RETURNING *`,
       [
         formule,
@@ -269,11 +302,12 @@ router.put('/:id', async (req, res) => {
         prix_perso,
         nom_complet,
         entreprise,
-        type_perso,
-        fonctionnalite,
+        type_perso ? JSON.stringify(type_perso) : null,
+        fonctionnalite ? JSON.stringify(fonctionnalite) : null,
         email,
         total,
         date ? new Date(date).toISOString() : null,
+        statut,
         id
       ]
     );
